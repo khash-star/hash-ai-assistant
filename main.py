@@ -1,11 +1,11 @@
 from flask import Flask, request, jsonify, render_template_string
-import openai
+from openai import OpenAI
 import os
 
 app = Flask(__name__)
 
-# Read API key from environment
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# OpenAI client (шинэ SDK)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Small HTML page for browser testing
 HTML_PAGE = """
@@ -25,13 +25,17 @@ HTML_PAGE = """
     <h3>Хариу:</h3>
     <pre>{{ reply }}</pre>
   {% endif %}
+  {% if error %}
+    <h3>Алдаа:</h3>
+    <pre>{{ error }}</pre>
+  {% endif %}
 </body>
 </html>
 """
 
 @app.route("/", methods=["GET"])
 def home():
-    return render_template_string(HTML_PAGE, user_text="", reply=None)
+    return render_template_string(HTML_PAGE, user_text="", reply=None, error=None)
 
 # Support both JSON (webhooks) and HTML form usage
 @app.route("/chat", methods=["GET", "POST"])
@@ -48,39 +52,46 @@ def chat():
 
     # 2) Validate
     if not user_text:
+        msg = "Хоосон текст ирсэн байна."
         if request.method == "POST" and not request.is_json:
-            return render_template_string(HTML_PAGE, user_text="", reply="Хоосон текст байна."), 400
-        return jsonify({"error": "Хоосон текст ирсэн байна."}), 400
+            return render_template_string(HTML_PAGE, user_text="", reply=None, error=msg), 400
+        return jsonify({"error": msg}), 400
 
-    # 3) Call OpenAI Chat Completion (using openai package)
+    # 3) Call OpenAI Chat Completion (шинэ SDK)
     try:
-        completion = openai.ChatCompletion.create(
-            model="gpt-4o-mini",  # choose a model you have access to
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",  # чамд нээлттэй модел байхад л болно
             messages=[
                 {
                     "role": "system",
-                    "content": "You are HASH AI Assistant for Buysmart, Shuurkhai, Hash Motors. Always reply in Mongolian, unless the user clearly asks for another language. Keep answers short and practical."
+                    "content": (
+                        "You are HASH AI Assistant for Buysmart, Shuurkhai, "
+                        "Hash Motors. Always reply in Mongolian, unless the "
+                        "user clearly asks for another language. "
+                        "Keep answers short and practical."
+                    ),
                 },
                 {"role": "user", "content": user_text},
             ],
             max_tokens=512,
         )
-        # openai.ChatCompletion.create returns a dict-like response
-        reply_text = completion["choices"][0]["message"]["content"]
+        reply_text = completion.choices[0].message.content
     except Exception as e:
-        # Log error and show a friendly message
         print("OpenAI error:", e, flush=True)
         error_msg = f"OpenAI алдаа: {e}"
         if request.method == "POST" and not request.is_json:
-            return render_template_string(HTML_PAGE, user_text=user_text, reply=error_msg), 500
+            return render_template_string(
+                HTML_PAGE, user_text=user_text, reply=None, error=error_msg
+            ), 500
         return jsonify({"error": error_msg}), 500
 
     # 4) Return HTML for form submissions, JSON for API clients
     if request.method == "POST" and not request.is_json:
-        return render_template_string(HTML_PAGE, user_text=user_text, reply=reply_text)
+        return render_template_string(
+            HTML_PAGE, user_text=user_text, reply=reply_text, error=None
+        )
     return jsonify({"reply": reply_text})
 
 if __name__ == "__main__":
-    # Use PORT env var if present (useful on platforms like Render)
     port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
