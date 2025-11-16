@@ -1,58 +1,82 @@
 from flask import Flask, request, jsonify
-import openai
+from openai import OpenAI
 import os
 
 app = Flask(__name__)
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# OpenAI client (түлхүүрийг Render дээрх OPENAI_API_KEY-аас уншина)
+client = OpenAI()
 
-# -----------------------------
-# 1) Browser дээр харагдах FORM
-# -----------------------------
+SYSTEM_PROMPT = """
+You are HASH AI Assistant for Buysmart, Shuurkhai, Hash Motors.
+Always reply in Mongolian, unless user clearly asks another language.
+Keep answers short and practical.
+""".strip()
+
+
 @app.route("/", methods=["GET"])
 def index():
+    # Жижиг тест HTML форм
     return """
-    <h2>HASH AI Assistant</h2>
-    <form method="post" action="/chat">
-      <textarea name="text" rows="5" cols="60" placeholder="Юу асуух вэ?"></textarea><br><br>
-      <button type="submit">Илгээх</button>
+    <h1>HASH AI Assistant</h1>
+    <form action="/chat" method="post">
+        <textarea name="text" rows="5" cols="60"></textarea><br/>
+        <button type="submit">Илгээх</button>
     </form>
     """
 
 
-# -----------------------------
-# 2) POST API endpoint (/chat)
-# -----------------------------
 @app.route("/chat", methods=["POST"])
 def chat():
-    # JSON эсвэл FORM аль нь ирсэн ч уншина
-    data = request.get_json(silent=True) or {}
-    user_text = data.get("text") or request.form.get("text", "")
+    """JSON ба HTML form хоёуланг дэмжинэ"""
+
+    user_text = ""
+
+    if request.is_json:
+        # ManyChat / webhook гэх мэт JSON POST
+        data = request.get_json(silent=True) or {}
+        user_text = (data.get("text") or "").strip()
+    else:
+        # HTML form-оос ирсэн text
+        user_text = (request.form.get("text") or "").strip()
 
     if not user_text:
-        return jsonify({"reply": "Хоосон текст ирлээ."}), 200
+        # Хоосон асуулт ирвэл
+        if request.is_json:
+            return jsonify({"error": "Хоосон текст ирлээ."}), 400
+        return "<p>Хоосон текст ирлээ.</p><a href='/'>Буцах</a>", 400
 
-    # OPENAI дуудлага
-    reply = openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are HASH AI assistant for Buysmart, Shuurkhai, Hash Motors."},
-            {"role": "user", "content": user_text},
-        ]
-    )
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+        )
+        reply = completion.choices[0].message.content
+    except Exception as e:
+        # Алдааг лог руу хэвлээд, хэрэглэгчид энгийн мессеж үзүүлнэ
+        print("OpenAI error:", e, flush=True)
+        if request.is_json:
+            return jsonify({"error": "OpenAI талд алдаа гарлаа."}), 500
+        return "<p>Дотоод алдаа гарлаа. Дахиад оролдоод үзээрэй.</p>", 500
 
-    bot_reply = reply.choices[0].message["content"]
+    # Хэрвээ JSON бол JSON-оор буцаана (ManyChat гэх мэтэд таарна)
+    if request.is_json:
+        return jsonify({"reply": reply})
 
-    # Хэрвээ POST form-оор ирсэн бол HTML буцаана
-    if request.form.get("text"):
-        return f"<h2>Хариу:</h2><p>{bot_reply}</p><br><a href='/'>Буцах</a>"
+    # Харин браузерын form бол HTML хуудас буцаана
+    return f"""
+    <h1>HASH AI Assistant</h1>
+    <p><b>Таны асуулт:</b></p>
+    <pre>{user_text}</pre>
+    <p><b>Хариу:</b></p>
+    <pre>{reply}</pre>
+    <a href="/">Дахин асуух</a>
+    """
 
-    # JSON response
-    return jsonify({"reply": bot_reply}), 200
 
-
-# -----------------------------
-# 3) Server Run
-# -----------------------------
 if __name__ == "__main__":
+    # Render дээр PORT орчинтой явж болно, гэхдээ одоогийн тохиргоо чинь OK
     app.run(host="0.0.0.0", port=10000)
